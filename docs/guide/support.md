@@ -37,6 +37,7 @@ When a job runs:
 | CUDA 13.2 (sm_80), same options, 2D and 3D | NVIDIA A100 | Run | Full suites on one GPU, except the tests that signal runs through `mpiexec` (the image's MPI is Open MPI 5) | device PRs (GPU CI) | |
 | HIP (ROCm 7.2, gfx90a), MPI, GPU-aware MPI, 2D and 3D | | Compile | Never run on an AMD GPU | device PRs | `ci.yml/hip` |
 | SYCL (oneAPI 2025.3, Intel GEN), MPI, GPU-aware MPI, 2D and 3D | | Compile | Never run on an Intel GPU | device PRs | `ci.yml/sycl` |
+| HIP (ROCm 7.1, gfx942), Kokkos HIP, serial host, 2D | Simulated AMD Instinct MI300X ([PantheonSim](https://github.com/pantheongpu/pantheonsim)) | Run | Test suite on the simulated GPU, except the slowest solver suites and three tests of `kexpr` and `region` | by hand | `gpu-sim.yml/tests` |
 | Serial, MPI, HDF5, 2D, AddressSanitizer and UBSan | x86-64 CPU | Run | Full suite on 1 rank; MPI tests on 2 ranks | nightly | `sanitizers.yml/asan-ubsan` |
 | Serial, HDF5, CGNS, Clang, libFuzzer, ASan and UBSan | x86-64 CPU | Run | Input and mesh reader harnesses: a minute each in 2D (every PR); ten minutes each in 2D and 3D (nightly) | every PR, nightly | `ci.yml/fuzz`, `fuzz.yml/fuzz` |
 | Serial, 2D and 3D | x86-64 CPU | Run | [Convergence studies](../verification/index.md) | by hand | `verification.yml/verification` |

@@ -1,0 +1,97 @@
+name: GPU Simulator
+
+# Optional, non-required check, run by hand like the rest of CI
+# (`gh workflow run gpu-sim.yml --ref <branch>`). The hosted runners have no
+# GPU, so this builds the 2D test suite with the Kokkos HIP backend for gfx942
+# and runs most of it on a simulated AMD Instinct MI300X
+# (https://github.com/pantheongpu/pantheonsim). The `hip` job in ci.yml builds
+# the same code but never runs it. A simulator cannot reproduce
+# hardware-specific behavior or timing, so it complements the maintainer's
+# A100 GPU CI and does not replace it.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: tests (ROCm 7.1 and simulated MI300X)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          submodules: true
+          persist-credentials: false
+
+      - name: Set up the simulated GPU and ROCm
+        uses: pantheongpu/setup-pantheonsim@ca87fe3143b29166822b923d6050945c5179408c # v0.1.5
+        with:
+          gpu: amd/mi300x
+          cuda-toolkit: none
+          rocm: "7.1"
+
+      # The action installs only the compiler side of ROCm. Kokkos' HIP
+      # configuration needs comgr (for hip-config.cmake) and rocPRIM.
+      - name: Install the ROCm libraries Kokkos needs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y comgr rocprim-dev
+
+      # Release, not the empty build type: unoptimized HIP code is very slow
+      # on the simulator. Same Kokkos options as the hip job in ci.yml, with
+      # gfx942 instead of gfx90a and without MPI.
+      - name: Configure
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DUSE_SYSTEM_KOKKOS=OFF \
+            -DCMAKE_CXX_COMPILER=/opt/rocm/bin/hipcc -DCMAKE_PREFIX_PATH=/opt/rocm \
+            -DKokkos_ENABLE_HIP=ON -DKokkos_ARCH_AMD_GFX942=ON \
+            -DKokkos_ENABLE_ROCTHRUST=OFF -DKokkos_ENABLE_SERIAL=ON \
+            -DMallard_DIM=2
+
+      - name: Build
+        run: cmake --build build -j3 --target mallard-test
+
+      # One process per suite, so one aborted suite does not hide the rest.
+      #
+      # Left out:
+      # - the suites that run whole solver cases (shock tubes, mixtures,
+      #   chemistry, validation sweeps) and take over 3 to 5 minutes each on
+      #   the simulator: ChemistryReactorTest, MixtureTest,
+      #   MixtureTransportTest, MPITest, SolverValidation, NSCBCTest,
+      #   PresetValidation, Examples/ExampleUnderPreset, Solver/SodMesh and
+      #   Viscous/ViscousMesh;
+      # - KexprTest.DeviceMatchesHost and RegionTest.DeviceMatchesHost, which
+      #   compare device and host bitwise (EXPECT_EQ) unless KOKKOS_ENABLE_CUDA
+      #   is defined, which relaxes them to a few ulp. On HIP the device math
+      #   differs from the host in the last bits;
+      # - KexprTest.LanesMatchPointByPointBitwise, whose launch fails on the
+      #   simulator with "a scratch access ... is past the bytes a work-item
+      #   reserved".
+      - name: Test
+        shell: bash {0}
+        run: |
+          vgpu run build/test/mallard-test2d --gtest_list_tests > tests.txt
+          skip=" ChemistryReactorTest MixtureTest MixtureTransportTest MPITest SolverValidation NSCBCTest PresetValidation Examples/ExampleUnderPreset Solver/SodMesh Viscous/ViscousMesh "
+          failed=0; passed=0
+          for s in $(grep -E '^[A-Za-z0-9_/]+\.$' tests.txt | tr -d .); do
+            case "$s" in DISABLED_*|*/DISABLED_*) continue;; esac
+            case "$skip" in *" $s "*) continue;; esac
+            filter="$s.*"
+            case "$s" in KexprTest|RegionTest) filter="$s.*:-$s.DeviceMatchesHost:$s.LanesMatchPointByPointBitwise";; esac
+            log="log-${s//\//_}.txt"
+            timeout -s KILL 600 vgpu run build/test/mallard-test2d --gtest_filter="$filter" --gtest_brief=1 > "$log" 2>&1
+            rc=$?
+            n=$(sed -n 's/^\[  PASSED  \] \([0-9]*\) test.*/\1/p' "$log")
+            echo "$s rc=$rc passed=${n:-0}"
+            passed=$((passed + ${n:-0}))
+            if [ $rc -ne 0 ]; then failed=1; tail -n 15 "$log" | cut -c1-300 | sed 's/^/    | /'; fi
+          done
+          echo "passed tests: $passed"
+          [ $failed -eq 0 ] && [ $passed -gt 0 ]
