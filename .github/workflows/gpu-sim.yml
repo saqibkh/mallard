@@ -11,6 +11,8 @@ name: GPU Simulator
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ verify-gpu-sim ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -95,3 +97,10 @@ jobs:
           done
           echo "passed tests: $passed"
           [ $failed -eq 0 ] && [ $passed -gt 0 ]
+
+      # Verification branch only: pin down the failing launch
+      - name: Diagnose the kexpr lanes test
+        continue-on-error: true
+        shell: bash {0}
+        run: |
+          timeout -s KILL 600 vgpu run build/test/mallard-test2d --gtest_filter='KexprTest.LanesMatchPointByPointBitwise' 2>&1 | grep -E '^\[|VirtualGPU' | cut -c1-300
